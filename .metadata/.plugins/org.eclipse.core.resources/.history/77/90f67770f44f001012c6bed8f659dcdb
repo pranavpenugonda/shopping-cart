@@ -1,0 +1,121 @@
+package com.CartService.service;
+
+import java.nio.file.attribute.UserPrincipalNotFoundException;
+import java.util.ArrayList;
+import java.util.Optional;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.CartService.Repository.CartItemRepository;
+import com.CartService.Repository.CartRepository;
+import com.CartService.dto.ProductDto;
+import com.CartService.exception.ProductNotFoundException;
+import com.CartService.exception.UserNotFoundException;
+import com.CartService.feign.ProductClient;
+import com.CartService.model.Cart;
+import com.CartService.model.CartItem;
+
+import feign.FeignException;
+
+@Service
+public class CartServiceImpl implements CartService {
+
+    @Autowired
+    private CartRepository cartRepository;
+
+    @Autowired
+    private CartItemRepository cartItemRepository;
+    
+
+	@Autowired
+	private ProductClient productClient;
+
+
+	@Override
+	public Cart getCartByUserId(Long userId) {
+	    return cartRepository.findByUserId(userId)
+	        .orElseGet(() -> {
+	            Cart newCart = new Cart();
+	            newCart.setUserId(userId);
+	            newCart.setItems(new ArrayList<>());
+	            newCart.setTotalPrice(0.0);
+	            return cartRepository.save(newCart);
+	        });
+	}
+
+
+	@Override
+	public Cart addItemToCart(Long userId, CartItem item) throws Exception {
+	    try {
+	        ProductDto product = productClient.getProductById(item.getProductId());
+	        
+	        Cart cartFromDb = cartRepository.getById(cartId);
+	        
+	        
+	        int quantity = 0;
+	        
+	        for(CartItem ci : cartFromDb.getItems()) {
+	        	if(ci.getQuantity() > 0) {
+	        		quantity += item.getQuantity();
+	        		item.setQuantity(quantity);
+	        	}
+	        }
+	        
+	        
+
+	        System.out.println("Fetched product: " + product);
+	        System.out.println("Requested quantity: " + item.getQuantity());
+
+	        if (product == null) {
+	            throw new Exception("Product is null.");
+	        }
+
+	        if (product.getStock() == null) {
+	            throw new Exception("Product stock is null.");
+	        }
+
+	        if (product.getStock() < item.getQuantity()) {
+	            throw new Exception("Insufficient stock.");
+	        }
+
+	        item.setPrice(product.getPrice());
+	        Cart cart = getCartByUserId(userId);
+	        item.setCart(cart);
+	        cart.getItems().add(item);
+	        recalculateTotal(cart);
+	        cartItemRepository.save(item);
+	        return cartRepository.save(cart);
+
+	    } catch (FeignException ex) {
+	        System.out.println("FeignException: " + ex.getMessage());
+	        throw new ProductNotFoundException("FeignException: " + ex.getMessage());
+	    }
+	}
+
+
+
+    @Override
+    public Cart removeItemFromCart(Long userId, Long itemId) throws Exception {
+        Cart cart = getCartByUserId(userId);
+        cart.getItems().removeIf(item -> item.getId().equals(itemId));
+        recalculateTotal(cart);
+        return cartRepository.save(cart);
+    }
+
+    @Override
+    public void clearCart(Long userId) throws Exception {
+        Cart cart = getCartByUserId(userId);
+        cart.getItems().clear();
+        cart.setTotalPrice(0.0);
+        cartRepository.save(cart);
+    }
+
+    private void recalculateTotal(Cart cart) {
+        double total = cart.getItems().stream()
+                .mapToDouble(item -> item.getPrice() * item.getQuantity())
+                .sum();
+        cart.setTotalPrice(total);
+    }
+}
+
